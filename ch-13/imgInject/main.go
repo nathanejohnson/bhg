@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	flags = pflag.FlagSet{SortFlags: false}
-	opts  models.CmdLineOpts
-	png   pnglib.MetaChunk
+	flags       = pflag.FlagSet{SortFlags: false}
+	opts        models.CmdLineOpts
+	png         pnglib.MetaChunk
+	payloadFile string
 )
 
 func init() {
@@ -30,6 +31,7 @@ func init() {
 	flags.StringVar(&opts.Key, "key", "", "The enryption key for payload")
 	flags.BoolVar(&opts.Encode, "encode", false, "XOR encode the payload")
 	flags.BoolVar(&opts.Decode, "decode", false, "XOR decode the payload")
+	flags.StringVar(&payloadFile, "payloadfile", "", "Path to payload file")
 	flags.Lookup("type").NoOptDefVal = "rNDm"
 	flags.Usage = usage
 	flags.Parse(os.Args[1:])
@@ -54,8 +56,8 @@ func init() {
 	if opts.Inject && (opts.Offset == "") {
 		log.Fatal("Fatal: The --offset flag is required when using --inject")
 	}
-	if opts.Inject && (opts.Payload == "") {
-		log.Fatal("Fatal: The --payload flag is required when using --inject")
+	if opts.Inject && opts.Payload == "" && payloadFile == "" {
+		log.Fatalf("Fatal: The --payload flag is required when using --inject -- %s", payloadFile)
 	}
 	if opts.Inject && opts.Key == "" {
 		fmt.Println("Warning: No key provided. Payload will not be encrypted")
@@ -75,6 +77,15 @@ func usage() {
 }
 
 func main() {
+	if len(payloadFile) > 0 {
+
+		payload, err := os.ReadFile(payloadFile)
+		if err != nil {
+			log.Fatalf("cannot read file %s: %s", payloadFile, err)
+		}
+		opts.Payload = string(payload)
+	}
+
 	dat, err := os.Open(opts.Input)
 	defer dat.Close()
 	bReader, err := utils.PreProcessImage(dat)

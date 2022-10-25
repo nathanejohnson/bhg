@@ -1,12 +1,14 @@
 package pnglib
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"hash/crc32"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -18,12 +20,12 @@ const (
 	endChunkType = "IEND"
 )
 
-//Header holds the first byte (aka magic byte)
+// Header holds the first byte (aka magic byte)
 type Header struct {
 	Header uint64 //  0:8
 }
 
-//Chunk represents a data byte chunk
+// Chunk represents a data byte chunk
 type Chunk struct {
 	Size uint32
 	Type uint32
@@ -31,25 +33,62 @@ type Chunk struct {
 	CRC  uint32
 }
 
-//MetaChunk inherits a Chunk struct
+// MetaChunk inherits a Chunk struct
 type MetaChunk struct {
 	Chk    Chunk
 	Offset int64
 }
 
-//ProcessImage is the wrapper to parse PNG bytes
+// ProcessImage is the wrapper to parse PNG bytes
 func (mc *MetaChunk) ProcessImage(b *bytes.Reader, c *models.CmdLineOpts) {
 	mc.validate(b)
 	if (c.Offset != "") && (c.Encode == false && c.Decode == false) {
+		offset, _ := strconv.ParseInt(c.Offset, 10, 64)
 		var m MetaChunk
-		m.Chk.Data = []byte(c.Payload)
+		payload := []byte(c.Payload)
+		switch http.DetectContentType(payload) {
+		case "application/zip":
+			// exploit the fact that zips can be unzipped
+			// even when they don't start at the beginning,
+			// just need to update the offset
+			err := func() error {
+				bw := bytes.NewBuffer(make([]byte, 0, len(payload)))
+				br := bytes.NewReader(payload)
+				zr, err := zip.NewReader(br, int64(len(payload)))
+				if err != nil {
+					return err
+				}
+				zw := zip.NewWriter(bw)
+				zw.SetOffset(offset + 8)
+				defer zw.Close()
+				zw.SetComment(zr.Comment)
+				for _, f := range zr.File {
+					err = zw.Copy(f)
+					if err != nil {
+						return err
+					}
+				}
+				zw.Flush()
+				zw.Close()
+				fmt.Printf("original length: %d copied length: %d\n", len(payload), bw.Len())
+				m.Chk.Data = bw.Bytes()
+				return nil
+			}()
+			if err != nil {
+				fmt.Printf("error processing zip file, continuing: %s", err)
+				m.Chk.Data = payload
+			}
+		default:
+			m.Chk.Data = payload
+
+		}
+
 		m.Chk.Type = m.strToInt(c.Type)
 		m.Chk.Size = m.createChunkSize()
 		m.Chk.CRC = m.createChunkCRC()
 		bm := m.marshalData()
 		bmb := bm.Bytes()
-		fmt.Printf("Payload Original: % X\n", []byte(c.Payload))
-		fmt.Printf("Payload: % X\n", m.Chk.Data)
+
 		utils.WriteData(b, c, bmb)
 	}
 	if (c.Offset != "") && c.Encode {
